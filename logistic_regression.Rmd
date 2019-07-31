@@ -1,0 +1,363 @@
+---
+title: 'Image Classification through Logistic Regression with Stochastic Gradient Descent'
+author: "Aaron Briel"
+date: "7/23/2018"
+output: pdf_document
+header-includes: 
+  \DeclareMathOperator*{\argmin}{\arg\!min}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Setting seed to ensure replicable results
+set.seed(12345)
+```
+
+## 1. Implementation  
+
+The train and test data are extracted from mnist_train.csv and mnist_test.csv and then partitioned for classification of 0/1 and 3/5 classes. The true class labels are then pulled from these partitions and stored in separate label vectors for test 0/1, test 3/5, train 0/1 and train 3/5, where 0 and 3 values are assigned the -1 label and 1 and 5 values are assigned to 1. The label row is removed from the datasets, thus separating the true class label from all the partitions created. It is assumed that bias is intrinsic in the training data and labels, so a value for this is not explicitly set. Although accuracies were generally consistent with observations across multiple seeded and non-seeded test runs, a seed was set to ensure reproducible results.
+
+The train function implements Logistic Regression using Stochastic Gradient Descent. It accepts data, labels and alpha, and has a default convergence threshold of 0.0005. dataset_name is another optional parameter that can be set for displaying accuracy values during epochs. theta is initialized to random values between -1 and 1. Meanwhile, theta_old and theta_new, used later for the convergence criteria, are set to all 100s and 200s respectively.
+
+The convergence criteria specifies that iterations can proceed while the absolute value of any value in theta_new - theta_old is greater than the convergence threshold and the current epoch is less than the maximum number of epochs. Within this while loop an index vector is sampled randomly from 1 to the number of data columns (samples). A loop then iterates through all of the samples of data in the dataset passed in, pulling data and labels from the ith value of the index vector. This approach ensures that a random sample of data and its corresponding label are used for each iteration. The implementation of the derivative of the loss function is then executed within the loop to update theta, and a conditional is in place to break from from the loop if convergence occurs prior to a full iteration over the data samples. After the loop, theta_new is then set to the updated theta value. Once the convergence criteria is met, theta is returned.
+
+The predict function calculates a "sign" vector by computing the dot product of a dataset and theta. The values in the resulting vector are set to -1 for values less than 0, and to 1 for values above 0.
+
+Below are visualizations of two correct and two incorrect predictions for the 0/1 and 3/5 training sets respectively, including the true labels and predicted labels.
+  
+```{r echo=FALSE, results='hide', message=FALSE}
+start_time <- Sys.time()
+library(stringr)
+
+# Reading mnist_train.csv and mnist_test.csv separately.
+data_dir <- "mnist"
+train_data <- read.csv(paste(data_dir, "mnist_train.csv", sep="/"), header=FALSE)
+test_data <- read.csv(paste(data_dir, "mnist_test.csv", sep="/"), header=FALSE)
+
+# Partitioning the training and test sets for classification of 0, 1 and 3, 5 classes
+train_data_0_1 <- cbind(train_data[, unlist(train_data[785,]) == 0],
+                        train_data[, unlist(train_data[785,]) == 1])
+train_data_3_5 <- cbind(train_data[, unlist(train_data[785,]) == 3],
+                        train_data[, unlist(train_data[785,]) == 5])
+test_data_0_1 <- cbind(test_data[, unlist(test_data[785,]) == 0],
+                       test_data[, unlist(test_data[785,]) == 1])
+test_data_3_5 <- cbind(test_data[, unlist(test_data[785,]) == 3],
+                       test_data[, unlist(test_data[785,]) == 5])
+
+# Separating the true class label from all the partitions created
+train_labels_0_1 <- train_data_0_1[785,]
+train_labels_3_5 <- train_data_3_5[785,]
+test_labels_0_1 <- test_data_0_1[785,]
+test_labels_3_5 <- test_data_3_5[785,]
+
+# Removing labels (row 785) from the actual image data
+train_data_0_1 <- train_data_0_1[-c(785),]
+train_data_3_5 <- train_data_3_5[-c(785),]
+test_data_0_1 <- test_data_0_1[-c(785),]
+test_data_3_5 <- test_data_3_5[-c(785),]
+
+# Mapping image values to the labels {-1,1}
+train_labels_0_1[1, train_labels_0_1[1, ] == 0] <- -1
+train_labels_3_5[1, train_labels_3_5[1, ] == 3] <- -1
+train_labels_3_5[1, train_labels_3_5[1, ] == 5] <- 1
+test_labels_0_1[1, test_labels_0_1[1, ] == 0] <- -1
+test_labels_3_5[1, test_labels_3_5[1, ] == 3] <- -1
+test_labels_3_5[1, test_labels_3_5[1, ] == 5] <- 1
+
+# Accepts single image sample and class and creates a matrix from said 
+# sample vector with matching columns/rows, then rotates it 90 degrees 
+# in image creation
+visualize = function(image_data, true_label, pred_label) {
+  mat <- matrix(image_data, 
+                ncol=sqrt(length(image_data)), 
+                nrow=sqrt(length(image_data)))
+  
+  image(t(apply(mat, 2, rev)), col=gray(0:255/255))
+  title(main=paste0("True Label: ", true_label, 
+                    "\nPredicted Label: ", pred_label))
+}
+
+# Implement Logistic Regression in R using Stochastic Gradient Descent.
+train <- function(data, labels, alpha, conv_thresh = 0.0005, dataset_name="default_value") {
+  # Initializing theta to random values between -1 and 1
+  theta <- matrix(rnorm(nrow(data), mean = 0, sd = 0.5), nrow = 1)
+  theta_old <- rep(100, nrow(data))
+  theta_new <- rep(200, nrow(data))
+  epoch <- 1
+  # Set maximum number of epochs to prevent infinite loop
+  max_epochs <- 50
+  
+  if (dataset_name != "default_value") {
+    print(paste0("Running train with dataset: ", dataset_name))  
+  }
+  
+  # Convergence criteria
+  while(any(abs(theta_new - theta_old) > conv_thresh) & epoch < max_epochs) {
+    # Randomly shuffling index to eliminate need to sample every time
+    index <- sample(1:ncol(data))
+    theta_old <- theta
+
+    for(i in 1:ncol(data)) {
+      # Pulling column (sample) number from shuffled dataset to be able to 
+      # extract correct label and specific data element
+      samp_col <- index[i]
+
+      # Implementation of the derivative of the loss function
+      xy <- labels[1,samp_col]*data[, samp_col]
+      z <- as.vector(exp(labels[1,samp_col] * theta %*% data[,samp_col]))
+      theta <- theta + alpha * (xy / (1 + z))
+
+      # Breaking from for loop if convergence happens prior to full iteration
+      if (all(abs(theta - theta_old) < conv_thresh)) {
+        break
+      }
+    }
+
+    theta_new <- theta
+
+    # Printing accuracy per epoch
+    predictions <- predict(theta, data)
+    correct_predictions <- table(predictions == labels)["TRUE"]
+    accuracy <- correct_predictions / length(labels)
+    print(paste0("Epoch: ", epoch))
+    print(paste0("Accuracy: ", accuracy))
+    
+    epoch <- epoch + 1
+  }
+
+  return (theta)
+}
+
+# Predict labels for given data by calculating sign(<x, theta>).
+predict <- function(theta, data) {
+  labels <- theta %*% as.matrix(data)
+  labels[1, labels[1, ] < 0] <- -1
+  labels[1, labels[1, ] > 0] <- 1
+  return (labels) 
+}
+
+# Run train() on the 0/1 dataset (train_data_0_1, train_labels_0_1) using a suitable learning rate
+theta_train_0_1 <- train(train_data_0_1, train_labels_0_1, alpha=0.05, dataset_name="train_data_0_1")
+predictions_0_1 <- predict(theta_train_0_1, train_data_0_1)
+correct_predictions <- which(predictions_0_1 == train_labels_0_1, arr.ind = TRUE)
+```
+  
+```{r echo=FALSE}  
+visualize(train_data_0_1[,correct_predictions[1, ][[2]]], true_label=0, pred_label=0)
+```
+  
+```{r echo=FALSE}  
+visualize(train_data_0_1[,correct_predictions[nrow(correct_predictions),][[2]]], true_label=1, pred_label=1)
+```
+  
+```{r echo=FALSE}
+# Visualizing incorrect predictions
+incorrect_predictions <- which(predictions_0_1 != train_labels_0_1, arr.ind = TRUE)
+visualize(train_data_0_1[,incorrect_predictions[1, ][[2]]], true_label=0, pred_label=1)
+```
+  
+```{r echo=FALSE}
+visualize(train_data_0_1[,incorrect_predictions[nrow(incorrect_predictions),][[2]]], true_label=1, pred_label=0)
+```
+  
+```{r echo=FALSE, results='hide', message=FALSE} 
+# Repeat the same with the 3/5 dataset
+theta_train_3_5 <- train(train_data_3_5, train_labels_3_5, alpha=0.05, dataset_name="train_data_3_5")
+predictions_3_5 <- predict(theta_train_3_5, train_data_3_5)
+correct_predictions <- which(predictions_3_5 == train_labels_3_5, arr.ind = TRUE)
+
+visualize(train_data_3_5[,correct_predictions[1, ][[2]]], true_label=3, pred_label=3)
+```
+  
+```{r echo=FALSE}
+visualize(train_data_3_5[,correct_predictions[nrow(correct_predictions),][[2]]], true_label=5, pred_label=5)
+```
+  
+```{r echo=FALSE}
+# Visualizing incorrect predictions
+incorrect_predictions <- which(predictions_3_5 != train_labels_3_5, arr.ind = TRUE)
+visualize(train_data_3_5[,incorrect_predictions[1, ][[2]]], true_label=3, pred_label=5)
+```
+  
+```{r echo=FALSE}
+visualize(train_data_3_5[,incorrect_predictions[nrow(incorrect_predictions),][[2]]], true_label=5, pred_label=3)
+```
+  
+## 2. Modeling
+
+```{r echo=FALSE, results='hide', message=FALSE}
+start_time <- Sys.time()
+library(ggplot2)
+library(reshape2)
+
+accuracy <- function(labels, labels_pred) {
+  correct_predictions <- table(labels == labels_pred)["TRUE"]
+  acc <- correct_predictions / length(labels)
+  return (acc)
+}
+
+model <- function(train_data, train_labels, test_data, test_labels, alpha, 
+                  dataset_name="default_dataset") {
+  theta <- train(train_data, train_labels, alpha, dataset_name=dataset_name)
+  train_labels_pred <- predict(theta, train_data)
+  test_labels_pred <- predict(theta, test_data)
+  train_acc <- accuracy(train_labels, train_labels_pred)
+  test_acc <- accuracy(test_labels, test_labels_pred)
+  return(list(theta=theta, train_acc=train_acc, test_acc=test_acc))
+}
+```
+Two models were trained, one on the 0/1 dataset and another on the 3/5 dataset, and their training and test accuracies were displayed.  
+
+```{r echo=FALSE}
+# Train 2 models, one on the 0/1 set and another on the 3/5 set, 
+# and compute their training and test accuracies.
+model_0_1 <- model(train_data_0_1, train_labels_0_1, test_data_0_1, test_labels_0_1, 
+                   alpha = 0.05, dataset_name="train_data_0_1")
+print(paste0("Model 0/1 training accuracy: ", model_0_1$train_acc))
+print(paste0("Model 0/1 test accuracy: ", model_0_1$test_acc))
+
+model_3_5 <- model(train_data_3_5, train_labels_3_5, test_data_3_5, test_labels_3_5, 
+                   alpha = 0.05, dataset_name="train_data_3_5")
+print(paste0("Model 3/5 training accuracy: ", model_3_5$train_acc))
+print(paste0("Model 3/5 test accuracy: ", model_3_5$test_acc))
+
+```
+The above step was repeated ten times with learning rates among the following set: 0.01, 0.02, 0.03, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 0.9. Average accuracies were calculated by repeating the training runs ten times for each learning rate. Resulting mean accuracies were then plotted against those rates.  
+  
+```{r echo=FALSE, results='hide', message=FALSE}
+# Repeat the above step 10 times, with varying learning rates.
+alphas <- c(0.01, 0.02, 0.03, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 0.9)
+training_acc_0_1 <- rep(0,10)
+test_acc_0_1 <- rep(0,10)
+training_acc_3_5 <- rep(0,10)
+test_acc_3_5 <- rep(0,10)
+
+# Training both datasets multiple times with varying alpha values
+counter <- 10
+for (i in 1:counter) {
+  training_acc_0_1_loop <- 0
+  training_acc_3_5_loop <- 0
+  test_acc_0_1_loop <- 0
+  test_acc_3_5_loop <- 0
+  for (l in 1:counter) {
+    model_0_1 <- model(train_data_0_1, train_labels_0_1, test_data_0_1, test_labels_0_1, 
+                       alpha = alphas[i], dataset_name="train_data_0_1")
+    training_acc_0_1_loop <- training_acc_0_1_loop + model_0_1$train_acc
+    test_acc_0_1_loop <- test_acc_0_1_loop + model_0_1$test_acc
+    model_3_5 <- model(train_data_3_5, train_labels_3_5, test_data_3_5, test_labels_3_5, 
+                       alpha = alphas[i], dataset_name="train_data_3_5")
+    training_acc_3_5_loop <- training_acc_3_5_loop + model_3_5$train_acc
+    test_acc_3_5_loop <- test_acc_3_5_loop + model_3_5$test_acc
+  }
+  # Storing average values for training and test sets for each alpha value
+  training_acc_0_1[i] <- training_acc_0_1_loop / counter
+  test_acc_0_1[i] <- test_acc_0_1_loop / counter
+  training_acc_3_5[i] <- training_acc_3_5_loop / counter
+  test_acc_3_5[i] <- test_acc_3_5_loop / counter
+}
+
+eval_df <- data.frame(alphas, training_acc_0_1, test_acc_0_1, training_acc_3_5, test_acc_3_5)
+
+# Specifiying alphas as an id variable
+eval_df <- melt(eval_df, id.vars=c("alphas"))
+
+# Giving meaningful names to columns of dataframe
+names(eval_df) <- c('LearningRate', 'Dataset', 'Accuracy')
+
+# Plot the training and test accuracies against learning rate for 0/1 and 3/5.
+pd <- position_dodge(0.1)
+ggplot(eval_df, aes(x=LearningRate, y=Accuracy, color=Dataset)) + 
+  labs(title = "Accuracy vs Learning Rate") +
+  geom_point(position=pd, size=2) +
+  geom_line(position=pd) +
+  scale_x_log10(breaks = scales::log_breaks(n = 10))
+```
+```{r echo=FALSE}
+print(paste0("0/1 Test Dataset Accuracies: ", test_acc_0_1[1:10]))
+print(paste0("3/5 Test Dataset Accuracies: ", test_acc_3_5[1:10]))
+```
+
+As indicated in the Accuracy vs Learning Rate graph above, accuracy did not seem to be linearly related to the learning rates in the range tested. The best accuracy for the 0/1 test dataset was found to be 99%, while the best for the 3/5 test dataset was 95%. Accuracies were generally higher for the 0/1 training and test datasets than for the 3/5 datasets. It was postulated that this was likely due to the numbers 3 and 5 being more visually similar to each other than the numbers 0 and 1, resulting in a higher number of misclassifications. It should be noted that the test and train results were very similar for the respective datasets involved. Specifically, the test results for 0/1 were very close to the 0/1 train results, and the test results for 3/5 were very close to its train results.
+
+In the situation where there is a requirement to classify more than two classes using Logistic Regression, a two dimensional label matrix could be leveraged. For example, a combined 0/1/3/5 dataset could store the following values for each respective number, where the first label (-1 or 1) could be stored in the first dimension and the second label (-1 or 1) could be stored in the second dimension:  
+0 = -1, -1  
+1 = -1, 1  
+3 = 1, -1  
+5 = 1, 1  
+  
+  
+The predict function would then need to be appropriately modified to accommodate this two-dimensional label matrix. 
+
+## 3. Learning Curves
+
+The 0/1 and 3/5 datasets were each trained ten times with sample sizes increasing by 10% in each iteration. A nested for loop repeated the training 5 times for each sample size value to calculate the mean accuracies. The mean accuracies were then plotted against sample size. 
+  
+```{r echo=FALSE, results='hide', message=FALSE}
+sample_size <- seq(0.1, 1, by=0.1)
+training_acc_0_1 <- rep(0,10)
+test_acc_0_1 <- rep(0,10)
+training_acc_3_5 <- rep(0,10)
+test_acc_3_5 <- rep(0,10)
+counter <- 5
+
+# Training both datasets ten times with sample sizes increasing by 10%
+for (i in 1:10) {
+  training_acc_0_1_loop <- 0
+  training_acc_3_5_loop <- 0
+  test_acc_0_1_loop <- 0
+  test_acc_3_5_loop <- 0
+  
+  train_data_0_1_sample <- train_data_0_1[,1:(round(ncol(train_data_0_1)*(i*0.1)))]
+  train_labels_0_1_sample <- train_labels_0_1[,1:(round(ncol(train_labels_0_1)*(i*0.1)))]
+  train_data_3_5_sample <- train_data_3_5[,1:(round(ncol(train_data_3_5)*(i*0.1)))]
+  train_labels_3_5_sample <- train_labels_3_5[,1:(round(ncol(train_labels_3_5)*(i*0.1)))]
+  
+  # Obtaining averages over 'counter'
+  for (l in 1:counter) {
+    model_0_1 <- model(train_data_0_1_sample, train_labels_0_1_sample, test_data_0_1, test_labels_0_1, 
+                       alpha = 0.05, dataset_name="train_data_0_1")
+    training_acc_0_1_loop <- training_acc_0_1_loop + model_0_1$train_acc
+    test_acc_0_1_loop <- test_acc_0_1_loop + model_0_1$test_acc
+    model_3_5 <- model(train_data_3_5_sample, train_labels_3_5_sample, test_data_3_5, test_labels_3_5, 
+                       alpha = 0.05, dataset_name="train_data_3_5")
+    training_acc_3_5_loop <- training_acc_3_5_loop + model_3_5$train_acc
+    test_acc_3_5_loop <- test_acc_3_5_loop + model_3_5$test_acc
+  }
+  # Storing average values for training and test sets for each sample size
+  training_acc_0_1[i] <- training_acc_0_1_loop / counter
+  test_acc_0_1[i] <- test_acc_0_1_loop / counter
+  training_acc_3_5[i] <- training_acc_3_5_loop / counter
+  test_acc_3_5[i] <- test_acc_3_5_loop / counter
+}
+
+eval_df_0_1 <- data.frame(sample_size, training_acc_0_1, test_acc_0_1)
+eval_df_0_1 <- melt(eval_df_0_1, id.vars=c("sample_size"))
+names(eval_df_0_1) <- c('SampleSize', 'Dataset', 'Accuracy')
+
+eval_df_3_5 <- data.frame(sample_size, training_acc_3_5, test_acc_3_5)
+eval_df_3_5 <- melt(eval_df_3_5, id.vars=c("sample_size"))
+names(eval_df_3_5) <- c('SampleSize', 'Dataset', 'Accuracy')
+
+# Plot the training and test accuracies against sample size for 0/1
+pd <- position_dodge(0.03)
+ggplot(eval_df_0_1, aes(x=SampleSize, y=Accuracy, color=Dataset)) + 
+  labs(title = "Accuracy vs Sample Size for 0/1 Dataset") +
+  geom_point(position=pd, size=2) +
+  geom_line(position=pd) +
+  scale_x_continuous(breaks=pretty(eval_df_0_1$SampleSize, n=10))
+
+# Plot the training and test accuracies against sample size for 3/5
+ggplot(eval_df_3_5, aes(x=SampleSize, y=Accuracy, color=Dataset)) + 
+  labs(title = "Accuracy vs Sample Size for 3/5 Dataset") +
+  geom_point(position=pd, size=2) +
+  geom_line(position=pd) +
+  scale_x_continuous(breaks=pretty(eval_df_3_5$SampleSize, n=10))
+
+end_time <- Sys.time()
+```
+  
+The graphs for both datasets of 0/1 and 3/5 indicate that the accuracy from training data did not appear to be strongly affected by sample size, with the exception of unexpected dips in the 60% and 70% sample size range which were not reliably reproducible in other seeded or non-seeded test runs. The test data, however, did appear to be influenced by sample size. In the example graphed, the 0/1 test set had accuracies in the 50% range until reaching a sample size of 50%, at which point the accuracy drastically increased and approached the training set measurement. Similar results were observed in the 3/5 dataset, where the said jump in accuracy occurred with a 60% sample size.
+  
+  
+  
+Total runtime of assignment: `r round(end_time - start_time)` minutes

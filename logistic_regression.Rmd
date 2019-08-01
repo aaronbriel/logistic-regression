@@ -1,5 +1,5 @@
 ---
-title: 'Image Classification through Logistic Regression with Stochastic Gradient Descent'
+title: 'Image Classification using Logistic Regression with Stochastic Gradient Descent'
 author: "Aaron Briel"
 date: "7/23/2018"
 output: pdf_document
@@ -10,7 +10,7 @@ header-includes:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 # Setting seed to ensure replicable results
-set.seed(12345)
+set.seed(123456)
 ```
 
 ## 1. Implementation  
@@ -357,7 +357,3 @@ end_time <- Sys.time()
 ```
   
 The graphs for both datasets of 0/1 and 3/5 indicate that the accuracy from training data did not appear to be strongly affected by sample size, with the exception of unexpected dips in the 60% and 70% sample size range which were not reliably reproducible in other seeded or non-seeded test runs. The test data, however, did appear to be influenced by sample size. In the example graphed, the 0/1 test set had accuracies in the 50% range until reaching a sample size of 50%, at which point the accuracy drastically increased and approached the training set measurement. Similar results were observed in the 3/5 dataset, where the said jump in accuracy occurred with a 60% sample size.
-  
-  
-  
-Total runtime of assignment: `r round(end_time - start_time)` minutes
